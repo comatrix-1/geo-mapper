@@ -1,0 +1,54 @@
+import type { LatLngLiteral } from 'leaflet';
+
+export type DrawingMode = 'none' | 'point' | 'circle' | 'polyline' | 'polygon' | 'ruler';
+
+export interface BaseMapObject {
+  id: string;
+  layerId: string;
+  type: 'point' | 'circle' | 'polyline' | 'polygon';
+  title: string;
+  description: string;
+}
+
+export interface MapPoint extends BaseMapObject {
+  type: 'point';
+  position: LatLngLiteral;
+}
+
+export interface MapCircle extends BaseMapObject {
+  type: 'circle';
+  center: LatLngLiteral;
+  radius: number; // in meters
+}
+
+export interface MapPolyline extends BaseMapObject {
+  type: 'polyline';
+  positions: LatLngLiteral[];
+}
+
+export interface MapPolygon extends BaseMapObject {
+  type: 'polygon';
+  positions: LatLngLiteral[];
+}
+
+export type MapObject = MapPoint | MapCircle | MapPolyline | MapPolygon;
+
+export interface LayerStyle {
+  borderColor: string;
+  borderWidth: number;
+  fillColor: string;
+  fillOpacity: number;
+}
+
+export interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  style: LayerStyle;
+}
+
+export interface RulerState {
+  active: boolean;
+  points: LatLngLiteral[];
+  totalDistance: number; // meters
+}
