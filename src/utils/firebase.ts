@@ -12,14 +12,15 @@ import { getFirestore } from 'firebase/firestore';
 // 6. Enable Firestore Database
 // ------------------------------------------------------------------
 // Debug: Log environment variables
+console.log('Environment:', import.meta.env.MODE);
 console.log('Firebase Config:', {
-  apiKey: !!import.meta.env.VITE_FIREBASE_API_KEY ? '***' : 'MISSING',
-  authDomain: !!import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ? '***' : 'MISSING',
-  projectId: !!import.meta.env.VITE_FIREBASE_PROJECT_ID ? '***' : 'MISSING',
-  storageBucket: !!import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ? '***' : 'MISSING',
-  messagingSenderId: !!import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ? '***' : 'MISSING',
-  appId: !!import.meta.env.VITE_FIREBASE_APP_ID ? '***' : 'MISSING',
-  measurementId: !!import.meta.env.VITE_FIREBASE_MEASUREMENT_ID ? '***' : 'MISSING'
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ? '***' : 'MISSING',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ? '***' : 'MISSING',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ? '***' : 'MISSING',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ? '***' : 'MISSING',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ? '***' : 'MISSING',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID ? '***' : 'MISSING',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID ? '***' : 'MISSING'
 });
 
 const firebaseConfig = {
