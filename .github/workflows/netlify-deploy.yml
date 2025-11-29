@@ -2,9 +2,9 @@ name: Deploy to Netlify
 
 on:
   push:
-    branches: [ main ]  # Change this to your default branch name (main or master)
+    branches: [ master ]
   pull_request:
-    branches: [ main ]  # Optional: Run on PRs to main branch
+    branches: [ master ]
 
 jobs:
   build-and-deploy:
