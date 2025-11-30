@@ -15,7 +15,7 @@ import type { LatLngLiteral, LeafletMouseEvent } from 'leaflet';
 import type { 
     MapObject, 
     DrawingMode, 
-    Layer, 
+    Layer as CustomLayer, 
     MapPoint, 
     MapCircle, 
     MapPolyline, 
@@ -38,7 +38,7 @@ import { Pencil, Trash2, Check } from 'lucide-react';
 const VERTEX_LIMIT = 100;
 
 interface MapBoardProps {
-  layers: Layer[];
+  layers: CustomLayer[];
   activeLayerId: string;
   drawingMode: DrawingMode;
   setDrawingMode: (mode: DrawingMode) => void;
@@ -49,6 +49,9 @@ interface MapBoardProps {
   rulerPoints: LatLngLiteral[];
   setRulerPoints: React.Dispatch<React.SetStateAction<LatLngLiteral[]>>;
   flyToTarget?: { id: string, time: number } | null;
+  onObjectUpdate?: (updatedObject: MapObject) => void;
+  onObjectDelete?: (id: string) => void;
+  onNewObject?: (obj: MapObject) => void;
 }
 
 // --- Internal Components ---
@@ -542,11 +545,11 @@ const MapEvents = ({
     drawingMode, 
     setDrawingMode,
     activeLayerId,
-    setObjects,
     rulerPoints,
     setRulerPoints,
     selectedObjectId,
-    setSelectedObjectId
+    setSelectedObjectId,
+    onNewObject
 }: any) => {
   const map = useMap();
   const [tempPoints, setTempPoints] = useState<LatLngLiteral[]>([]);
@@ -584,7 +587,7 @@ const MapEvents = ({
                 description: 'No description',
                 position: point
             };
-            setObjects((prev: MapObject[]) => [...prev, newPoint]);
+            onNewObject(newPoint);
             setDrawingMode('none'); 
         } 
         else if (drawingMode === 'circle') {
@@ -603,7 +606,7 @@ const MapEvents = ({
                         center: circleCenter,
                         radius: radius
                     };
-                    setObjects((prev: MapObject[]) => [...prev, newCircle]);
+                    onNewObject(newCircle);
                  }
                  setCircleCenter(null);
                  setDragPoint(null);
@@ -620,7 +623,7 @@ const MapEvents = ({
 
     map.on('click', handleClick);
     return () => { map.off('click', handleClick); };
-  }, [map, drawingMode, circleCenter, activeLayerId, setObjects, setDrawingMode, setSelectedObjectId, setRulerPoints]);
+  }, [map, drawingMode, circleCenter, activeLayerId, setDrawingMode, setSelectedObjectId, setRulerPoints, onNewObject]);
 
   // Mouse Move Handler (Only for Circle Preview)
   useEffect(() => {
@@ -649,7 +652,7 @@ const MapEvents = ({
                     description: 'No description',
                     positions: tempPoints
                 };
-                setObjects((prev: MapObject[]) => [...prev, newPolyline]);
+                onNewObject(newPolyline);
             }
             setTempPoints([]);
             setDrawingMode('none');
@@ -663,7 +666,7 @@ const MapEvents = ({
                     description: 'No description',
                     positions: tempPoints
                 };
-                setObjects((prev: MapObject[]) => [...prev, newPolygon]);
+                onNewObject(newPolygon);
              }
              setTempPoints([]);
              setDrawingMode('none');
@@ -674,7 +677,7 @@ const MapEvents = ({
 
       map.on('dblclick', handleDblClick);
       return () => { map.off('dblclick', handleDblClick); };
-  }, [map, drawingMode, tempPoints, activeLayerId, setObjects, setDrawingMode]);
+  }, [map, drawingMode, tempPoints, activeLayerId, setDrawingMode, onNewObject]);
 
   return (
     <>
@@ -716,7 +719,7 @@ const MapEvents = ({
   );
 };
 
-const MapBoard: React.FC<MapBoardProps> = ({
+const MapBoard: React.FC<MapBoardProps & { onObjectUpdate?: (o: MapObject) => void, onObjectDelete?: (id: string) => void, onNewObject?: (o: MapObject) => void }> = ({
   layers,
   activeLayerId,
   drawingMode,
@@ -727,7 +730,10 @@ const MapBoard: React.FC<MapBoardProps> = ({
   setSelectedObjectId,
   rulerPoints,
   setRulerPoints,
-  flyToTarget
+  flyToTarget,
+  onObjectUpdate,
+  onObjectDelete,
+  onNewObject
 }) => {
     const getLayerStyle = (layerId: string): LayerStyle => {
         const layer = layers.find(l => l.id === layerId);
@@ -742,7 +748,16 @@ const MapBoard: React.FC<MapBoardProps> = ({
     const isLayerVisible = (layerId: string) => layers.find(l => l.id === layerId)?.visible ?? true;
 
     const handleObjectUpdate = (id: string, updates: Partial<MapObject>) => {
-        setObjects(prev => prev.map(o => o.id === id ? { ...o, ...updates } as MapObject : o));
+        const target = objects.find(o => o.id === id);
+        if (!target) return;
+        
+        const updatedObject = { ...target, ...updates } as MapObject;
+        
+        // Optimistic UI Update
+        setObjects(prev => prev.map(o => o.id === id ? updatedObject : o));
+        
+        // Persist
+        if (onObjectUpdate) onObjectUpdate(updatedObject);
     };
 
     const updateObjectMeta = (id: string, title: string, desc: string) => {
@@ -750,10 +765,20 @@ const MapBoard: React.FC<MapBoardProps> = ({
     };
 
     const deleteObject = (id: string) => {
+        // Optimistic UI Update
         setObjects(prev => prev.filter(o => o.id !== id));
         if (selectedObjectId === id) {
             setSelectedObjectId(null);
         }
+        // Persist
+        if (onObjectDelete) onObjectDelete(id);
+    };
+
+    const handleNewObject = (obj: MapObject) => {
+        // Optimistic UI Update
+        setObjects(prev => [...prev, obj]);
+        // Persist
+        if (onNewObject) onNewObject(obj);
     };
 
   return (
@@ -775,11 +800,12 @@ const MapBoard: React.FC<MapBoardProps> = ({
             drawingMode={drawingMode} 
             setDrawingMode={setDrawingMode} 
             activeLayerId={activeLayerId}
-            setObjects={setObjects}
+            setObjects={setObjects} // Passed for compatibility, but main handling via onNewObject
             rulerPoints={rulerPoints}
             setRulerPoints={setRulerPoints}
             selectedObjectId={selectedObjectId}
             setSelectedObjectId={setSelectedObjectId}
+            onNewObject={handleNewObject}
         />
 
         {/* Render Objects */}

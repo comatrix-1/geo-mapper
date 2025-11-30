@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, getFirestore, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
+import type { Layer, MapObject } from '../types';
 
 // ------------------------------------------------------------------
 // CRITICAL: You must replace this config with your own from Firebase Console!
@@ -12,16 +13,6 @@ import { getFirestore } from 'firebase/firestore';
 // 6. Enable Firestore Database
 // ------------------------------------------------------------------
 // Debug: Log environment variables
-console.log('Environment:', import.meta.env.MODE);
-console.log('Firebase Config:', {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY ? '***' : 'MISSING',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN ? '***' : 'MISSING',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID ? '***' : 'MISSING',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET ? '***' : 'MISSING',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID ? '***' : 'MISSING',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID ? '***' : 'MISSING',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID ? '***' : 'MISSING'
-});
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -59,3 +50,108 @@ export { auth, googleProvider, db };
 
 // Log Firebase initialization
 console.log('Firebase initialized with app:', app.name);
+
+
+// --- Firestore Helpers for Scalable Data ---
+
+// Helper to chunk arrays for batch operations (Firestore limit is 500 ops)
+const chunkArray = <T>(arr: T[], size: number): T[][] => {
+    const chunks = [];
+    for (let i = 0; i < arr.length; i += size) {
+        chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+};
+
+/**
+ * Loads user data.
+ * Strategy:
+ * 1. Load 'layers' from the root user document.
+ * 2. Load 'objects' from the 'mapObjects' subcollection.
+ * 3. MIGRATION: If 'objects' exist in the root doc (legacy format), move them to subcollection.
+ */
+export const loadUserData = async (uid: string): Promise<{ layers: Layer[] | null, objects: MapObject[] }> => {
+    const userDocRef = doc(db, 'users', uid);
+    const userDocSnap = await getDoc(userDocRef);
+    
+    let layers: Layer[] | null = null;
+    let objects: MapObject[] = [];
+    let legacyObjects: MapObject[] = [];
+
+    if (userDocSnap.exists()) {
+        const data = userDocSnap.data();
+        layers = data.layers || null;
+        
+        // Check for legacy monolithic storage
+        if (data.objects && Array.isArray(data.objects) && data.objects.length > 0) {
+            console.log(`Found ${data.objects.length} legacy objects. Migrating...`);
+            legacyObjects = data.objects;
+        }
+    }
+
+    // Load from Subcollection
+    const objsRef = collection(db, 'users', uid, 'mapObjects');
+    const objsSnap = await getDocs(objsRef);
+    const subObjects = objsSnap.docs.map(d => d.data() as MapObject);
+    
+    objects = [...subObjects];
+
+    // Perform Migration if needed
+    if (legacyObjects.length > 0) {
+        // 1. Add to local list so UI updates immediately
+        objects = [...objects, ...legacyObjects];
+        
+        // 2. Persist to subcollection in background
+        saveObjectsBatch(uid, legacyObjects).then(async () => {
+            // 3. Remove from root doc to free up space
+            await updateDoc(userDocRef, {
+                objects: deleteField()
+            });
+            console.log("Migration complete: Legacy objects moved to subcollection.");
+        }).catch(err => console.error("Migration failed:", err));
+    }
+
+    return { layers, objects };
+};
+
+/**
+ * Save only Layers configuration to the root document.
+ */
+export const saveLayers = async (uid: string, layers: Layer[]) => {
+    const userDocRef = doc(db, 'users', uid);
+    // Merge true to avoid overwriting other fields if they exist
+    await setDoc(userDocRef, { layers }, { merge: true });
+};
+
+/**
+ * Save a single map object to the subcollection.
+ */
+export const saveObject = async (uid: string, obj: MapObject) => {
+    const objRef = doc(db, 'users', uid, 'mapObjects', obj.id);
+    await setDoc(objRef, obj);
+};
+
+/**
+ * Delete a single map object from the subcollection.
+ */
+export const deleteObject = async (uid: string, objId: string) => {
+    const objRef = doc(db, 'users', uid, 'mapObjects', objId);
+    await deleteDoc(objRef);
+};
+
+/**
+ * Save multiple objects (e.g., import) using Batch writes.
+ */
+export const saveObjectsBatch = async (uid: string, objects: MapObject[]) => {
+    // Firestore batches allow max 500 operations.
+    const chunks = chunkArray(objects, 450); // safe margin
+
+    for (const chunk of chunks) {
+        const batch = writeBatch(db);
+        chunk.forEach(obj => {
+            const ref = doc(db, 'users', uid, 'mapObjects', obj.id);
+            batch.set(ref, obj);
+        });
+        await batch.commit();
+    }
+};

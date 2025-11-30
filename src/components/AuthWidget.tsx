@@ -60,7 +60,6 @@ const AuthWidget: React.FC<AuthWidgetProps> = ({ user }) => {
   };
 
   if (user) {
-    console.log('user: ', user);
     return (
       <div className="flex items-center gap-2 bg-white/90 backdrop-blur border border-gray-200 rounded-full pl-1 pr-3 py-1 shadow-sm">
         {user.photoURL ? (

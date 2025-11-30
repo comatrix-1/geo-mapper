@@ -3,17 +3,22 @@ import MapBoard from './components/MapBoard';
 import LayerSidebar from './components/LayerSidebar';
 import Toolbar from './components/Toolbar';
 import AuthWidget from './components/AuthWidget';
-import type { DrawingMode, Layer, MapObject } from './types';
+import type { DrawingMode, Layer as CustomLayer, MapObject } from './types';
 import type { LatLngLiteral } from 'leaflet';
 import { saveProjectToFile, loadProjectFromFile } from './utils/fileImporter';
 
 // Firebase Imports
-import { onAuthStateChanged } from 'firebase/auth';
-import type { User } from 'firebase/auth';
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
-import { auth, db } from './utils/firebase';
+import { onAuthStateChanged, type User } from 'firebase/auth';
+import { 
+    auth, 
+    loadUserData, 
+    saveLayers, 
+    saveObject, 
+    deleteObject, 
+    saveObjectsBatch 
+} from './utils/firebase';
 
-const DEFAULT_LAYERS: Layer[] = [
+const DEFAULT_LAYERS: CustomLayer[] = [
   { 
       id: '1', 
       name: 'Points of Interest', 
@@ -31,10 +36,9 @@ const DEFAULT_LAYERS: Layer[] = [
 const App: React.FC = () => {
   // Auth State
   const [user, setUser] = useState<User | null>(null);
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
-
+  
   // App State
-  const [layers, setLayers] = useState<Layer[]>(DEFAULT_LAYERS);
+  const [layers, setLayers] = useState<CustomLayer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>(DEFAULT_LAYERS[0].id);
   const [objects, setObjects] = useState<MapObject[]>([]);
   
@@ -43,77 +47,39 @@ const App: React.FC = () => {
   const [flyToTarget, setFlyToTarget] = useState<{ id: string, time: number } | null>(null);
   const [rulerPoints, setRulerPoints] = useState<LatLngLiteral[]>([]);
 
-  // 1. Auth Listener
+  // 1. Auth Listener & Initial Load
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (!currentUser) {
         // Reset to defaults if logged out
         setLayers(DEFAULT_LAYERS);
         setObjects([]);
         setActiveLayerId(DEFAULT_LAYERS[0].id);
-        setIsDataLoaded(true); // Technically loaded "default" state
       } else {
-        setIsDataLoaded(false); // Waiting for Firestore
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // 2. Firestore Sync (Read)
-  useEffect(() => {
-    if (!user) return;
-
-    const userDocRef = doc(db, 'users', user.uid);
-
-    const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.layers) setLayers(data.layers);
-        if (data.objects) setObjects(data.objects);
-        // If we just loaded and activeLayerId isn't valid, fix it
-        if (data.layers && data.layers.length > 0) {
-            setActiveLayerId(prev => data.layers.find((l: Layer) => l.id === prev) ? prev : data.layers[0].id);
-        }
-      } else {
-        // New user - create initial doc
-        setDoc(userDocRef, {
-            layers: DEFAULT_LAYERS,
-            objects: []
-        }, { merge: true });
-      }
-      setIsDataLoaded(true);
-    }, (error) => {
-        console.error("Error fetching data:", error);
-        setIsDataLoaded(true);
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // 3. Firestore Sync (Write / Auto-save)
-  // We debounce this slightly to avoid hammering Firestore on every drag pixel
-  useEffect(() => {
-    if (!user || !isDataLoaded) return;
-
-    const saveData = async () => {
+        // Load data from Firestore (Root + Subcollection)
         try {
-            const userDocRef = doc(db, 'users', user.uid);
-            await setDoc(userDocRef, {
-                layers: layers,
-                objects: objects
-            }, { merge: true });
-        } catch (e) {
-            console.error("Auto-save failed", e);
+            const data = await loadUserData(currentUser.uid);
+            if (data.layers) {
+                setLayers(data.layers);
+                // Fix active layer if it disappeared
+                if (!data.layers.find(l => l.id === activeLayerId)) {
+                    setActiveLayerId(data.layers[0]?.id || DEFAULT_LAYERS[0].id);
+                }
+            } else {
+                // Initialize default layers for new user in background
+                saveLayers(currentUser.uid, DEFAULT_LAYERS);
+            }
+            if (data.objects) setObjects(data.objects);
+        } catch (err) {
+            console.error("Failed to load user data:", err);
         }
-    };
+      }
+    });
+    return () => unsubscribe();
+  }, []); // Run once on mount
 
-    const timeoutId = setTimeout(saveData, 1000); // 1 second debounce
-    return () => clearTimeout(timeoutId);
-
-  }, [layers, objects, user, isDataLoaded]);
-
-  // Data integrity: Ensure active layer always exists
+  // Data integrity: Ensure active layer always exists locally
   useEffect(() => {
       if (layers.length > 0 && !layers.find(l => l.id === activeLayerId)) {
           setActiveLayerId(layers[0].id);
@@ -121,14 +87,14 @@ const App: React.FC = () => {
   }, [layers, activeLayerId]);
 
 
-  // --- Handlers ---
+  // --- Handlers (With Persistence) ---
 
   const addLayer = () => {
     const newId = crypto.randomUUID();
     const colors = ['#f59e0b', '#8b5cf6', '#ec4899', '#6366f1'];
     const randomColor = colors[Math.floor(Math.random() * colors.length)];
     
-    const newLayer: Layer = {
+    const newLayer: CustomLayer = {
       id: newId,
       name: `Layer ${layers.length + 1}`,
       visible: true,
@@ -139,32 +105,71 @@ const App: React.FC = () => {
           fillOpacity: 0.2
       }
     };
-    setLayers([...layers, newLayer]);
+    const newLayers = [...layers, newLayer];
+    setLayers(newLayers);
     setActiveLayerId(newId);
+    
+    if (user) saveLayers(user.uid, newLayers);
   };
 
-  const deleteLayer = (id: string) => {
+  const handleDeleteLayer = (id: string) => {
     if (layers.length <= 1) return;
-    setLayers(layers.filter(l => l.id !== id));
-    setObjects(objects.filter(o => o.layerId !== id));
+    
+    const newLayers = layers.filter(l => l.id !== id);
+    setLayers(newLayers);
+    
+    // Also delete objects in this layer
+    const objectsToDelete = objects.filter(o => o.layerId === id);
+    const objectsToKeep = objects.filter(o => o.layerId !== id);
+    setObjects(objectsToKeep);
+
     if (activeLayerId === id) {
-      setActiveLayerId(layers.find(l => l.id !== id)?.id || layers[0].id);
+      setActiveLayerId(newLayers[0].id);
+    }
+
+    if (user) {
+        saveLayers(user.uid, newLayers);
+        // We should delete subcollection docs too
+        objectsToDelete.forEach(obj => deleteObject(user.uid, obj.id));
     }
   };
 
   const toggleLayerVisibility = (id: string) => {
-    setLayers(layers.map(l => l.id === id ? { ...l, visible: !l.visible } : l));
+    const newLayers = layers.map(l => l.id === id ? { ...l, visible: !l.visible } : l);
+    setLayers(newLayers);
+    if (user) saveLayers(user.uid, newLayers);
   };
 
-  const updateLayer = (updatedLayer: Layer) => {
-      setLayers(prev => prev.map(l => l.id === updatedLayer.id ? updatedLayer : l));
+  const updateLayer = (updatedLayer: CustomLayer) => {
+      const newLayers = layers.map(l => l.id === updatedLayer.id ? updatedLayer : l);
+      setLayers(newLayers);
+      if (user) saveLayers(user.uid, newLayers);
   };
 
   // Import handler
-  const handleImportLayer = (newLayer: Layer, newObjects: MapObject[]) => {
-      setLayers([...layers, newLayer]);
+  const handleImportLayer = (newLayer: CustomLayer, newObjects: MapObject[]) => {
+      const newLayers = [...layers, newLayer];
+      setLayers(newLayers);
       setObjects([...objects, ...newObjects]);
       setActiveLayerId(newLayer.id);
+
+      if (user) {
+          saveLayers(user.uid, newLayers);
+          saveObjectsBatch(user.uid, newObjects);
+      }
+  };
+
+  // Object Handlers
+  const handleNewObject = (obj: MapObject) => {
+      if (user) saveObject(user.uid, obj);
+  };
+
+  const handleObjectUpdate = (updatedObject: MapObject) => {
+      if (user) saveObject(user.uid, updatedObject);
+  };
+
+  const handleObjectDelete = (id: string) => {
+      if (user) deleteObject(user.uid, id);
   };
 
   // Save Project Handler (File export)
@@ -176,11 +181,18 @@ const App: React.FC = () => {
   const handleLoadProject = async (file: File) => {
       try {
           const { layers: loadedLayers, objects: loadedObjects } = await loadProjectFromFile(file);
-          if (confirm('Loading a project file will overwrite your current cloud data. Continue?')) {
+          if (confirm('Loading a project file will overwrite your local view. \n\nNote: If you are logged in, this will perform a bulk overwrite of your cloud data. Continue?')) {
               setLayers(loadedLayers);
               setObjects(loadedObjects);
               if (loadedLayers.length > 0) {
                   setActiveLayerId(loadedLayers[0].id);
+              }
+              
+              if (user) {
+                  saveLayers(user.uid, loadedLayers);
+                  // For a full project load, strictly we should delete old objects, but that's complex.
+                  // For now, we just save the new ones on top.
+                  saveObjectsBatch(user.uid, loadedObjects);
               }
           }
       } catch (err) {
@@ -217,7 +229,7 @@ const App: React.FC = () => {
         setActiveLayerId={setActiveLayerId}
         toggleLayerVisibility={toggleLayerVisibility}
         addLayer={addLayer}
-        deleteLayer={deleteLayer}
+        deleteLayer={handleDeleteLayer}
         updateLayer={updateLayer}
         objects={objects}
         selectedObjectId={selectedObjectId}
@@ -270,6 +282,9 @@ const App: React.FC = () => {
         rulerPoints={rulerPoints}
         setRulerPoints={setRulerPoints}
         flyToTarget={flyToTarget}
+        onObjectUpdate={handleObjectUpdate}
+        onObjectDelete={handleObjectDelete}
+        onNewObject={handleNewObject}
       />
     </div>
   );
