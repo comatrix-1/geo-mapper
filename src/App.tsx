@@ -3,12 +3,13 @@ import MapBoard from './components/MapBoard';
 import LayerSidebar from './components/LayerSidebar';
 import Toolbar from './components/Toolbar';
 import AuthWidget from './components/AuthWidget';
-import type { DrawingMode, Layer as CustomLayer, MapObject } from './types';
+import type { DrawingMode, Layer, MapObject } from './types';
 import type { LatLngLiteral } from 'leaflet';
 import { saveProjectToFile, loadProjectFromFile } from './utils/fileImporter';
 
 // Firebase Imports
-import { onAuthStateChanged, type User } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import { 
     auth, 
     loadUserData, 
@@ -18,7 +19,7 @@ import {
     saveObjectsBatch 
 } from './utils/firebase';
 
-const DEFAULT_LAYERS: CustomLayer[] = [
+const DEFAULT_LAYERS: Layer[] = [
   { 
       id: '1', 
       name: 'Points of Interest', 
@@ -38,7 +39,7 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   
   // App State
-  const [layers, setLayers] = useState<CustomLayer[]>(DEFAULT_LAYERS);
+  const [layers, setLayers] = useState<Layer[]>(DEFAULT_LAYERS);
   const [activeLayerId, setActiveLayerId] = useState<string>(DEFAULT_LAYERS[0].id);
   const [objects, setObjects] = useState<MapObject[]>([]);
   
@@ -94,7 +95,7 @@ const App: React.FC = () => {
     const colors = ['#f59e0b', '#8b5cf6', '#ec4899', '#6366f1'];
     const randomColor = colors[Math.floor(Math.random() * colors.length)];
     
-    const newLayer: CustomLayer = {
+    const newLayer: Layer = {
       id: newId,
       name: `Layer ${layers.length + 1}`,
       visible: true,
@@ -140,22 +141,46 @@ const App: React.FC = () => {
     if (user) saveLayers(user.uid, newLayers);
   };
 
-  const updateLayer = (updatedLayer: CustomLayer) => {
+  const updateLayer = (updatedLayer: Layer) => {
       const newLayers = layers.map(l => l.id === updatedLayer.id ? updatedLayer : l);
       setLayers(newLayers);
       if (user) saveLayers(user.uid, newLayers);
   };
 
-  // Import handler
-  const handleImportLayer = (newLayer: CustomLayer, newObjects: MapObject[]) => {
-      const newLayers = [...layers, newLayer];
-      setLayers(newLayers);
-      setObjects([...objects, ...newObjects]);
-      setActiveLayerId(newLayer.id);
+  // Import handler (Merging Logic with ID Regeneration)
+  const handleImportData = (newLayers: Layer[], newObjects: MapObject[]) => {
+      // 1. Create a mapping for Layer IDs (Old ID -> New ID) to prevent collisions
+      const layerIdMap = new Map<string, string>();
+      
+      const processedLayers = newLayers.map(l => {
+          const newId = crypto.randomUUID();
+          layerIdMap.set(l.id, newId);
+          return { ...l, id: newId };
+      });
 
+      // 2. Map objects to new Layer IDs and give them new IDs too
+      const processedObjects = newObjects.map(o => ({
+          ...o,
+          id: crypto.randomUUID(),
+          layerId: layerIdMap.get(o.layerId) || o.layerId // Fallback to original if not found (shouldn't happen in valid project file)
+      }));
+
+      // 3. Merge with existing state
+      const finalLayers = [...layers, ...processedLayers];
+      const finalObjects = [...objects, ...processedObjects];
+      
+      setLayers(finalLayers);
+      setObjects(finalObjects);
+      
+      // Set active layer to the first imported one
+      if (processedLayers.length > 0) {
+          setActiveLayerId(processedLayers[0].id);
+      }
+
+      // 4. Persist
       if (user) {
-          saveLayers(user.uid, newLayers);
-          saveObjectsBatch(user.uid, newObjects);
+          saveLayers(user.uid, finalLayers);
+          saveObjectsBatch(user.uid, processedObjects);
       }
   };
 
@@ -177,7 +202,7 @@ const App: React.FC = () => {
       saveProjectToFile(layers, objects);
   };
 
-  // Load Project Handler (File import)
+  // Load Project Handler (File import - Replace All)
   const handleLoadProject = async (file: File) => {
       try {
           const { layers: loadedLayers, objects: loadedObjects } = await loadProjectFromFile(file);
@@ -234,7 +259,7 @@ const App: React.FC = () => {
         objects={objects}
         selectedObjectId={selectedObjectId}
         onObjectClick={handleObjectClick}
-        onImportLayer={handleImportLayer}
+        onImportData={handleImportData}
         onSaveProject={handleSaveProject}
         onLoadProject={handleLoadProject}
       />

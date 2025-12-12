@@ -19,7 +19,8 @@ import {
     Download,
     FolderOpen,
     Save,
-    AlertTriangle
+    AlertTriangle,
+    FileJson
 } from 'lucide-react';
 import { importFile } from '../utils/fileImporter';
 
@@ -34,7 +35,7 @@ interface LayerSidebarProps {
   objects: MapObject[];
   selectedObjectId: string | null;
   onObjectClick: (id: string) => void;
-  onImportLayer: (layer: Layer, objects: MapObject[]) => void;
+  onImportData: (layers: Layer[], objects: MapObject[]) => void;
   onSaveProject: () => void;
   onLoadProject: (file: File) => void;
 }
@@ -110,7 +111,7 @@ const LayerStyleEditor = ({
     );
 };
 
-// Modal for editing layer settings
+// Modal for editing layer settings (Single Layer)
 const LayerSettingsModal = ({ 
     layer, 
     onSave, 
@@ -195,13 +196,13 @@ const LayerSidebar: React.FC<LayerSidebarProps> = ({
   objects,
   selectedObjectId,
   onObjectClick,
-  onImportLayer,
+  onImportData,
   onSaveProject,
   onLoadProject
 }) => {
   const [expandedLayerIds, setExpandedLayerIds] = useState<Set<string>>(new Set([activeLayerId]));
   const [editingLayer, setEditingLayer] = useState<Layer | null>(null);
-  const [importPreview, setImportPreview] = useState<{ layer: Layer, objects: MapObject[] } | null>(null);
+  const [importPreview, setImportPreview] = useState<{ layers: Layer[], objects: MapObject[] } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
@@ -277,7 +278,7 @@ const LayerSidebar: React.FC<LayerSidebarProps> = ({
                     <button
                         onClick={() => projectInputRef.current?.click()}
                         className="p-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-md transition-colors shadow-sm"
-                        title="Open Project (Import JSON)"
+                        title="Open Project (Import JSON - Replaces All)"
                     >
                         <FolderOpen size={14} />
                     </button>
@@ -422,7 +423,7 @@ const LayerSidebar: React.FC<LayerSidebarProps> = ({
         </div>
 
         <div className="p-3 bg-gray-50 text-xs text-center text-gray-400 border-t border-gray-100">
-            GeoLayer Mapper v1.4.0
+            GeoLayer Mapper v1.5.0
         </div>
         </div>
 
@@ -438,34 +439,94 @@ const LayerSidebar: React.FC<LayerSidebarProps> = ({
             />
         )}
 
-        {/* Import Preview Modal */}
+        {/* Import Preview Modal Logic */}
         {importPreview && (
-            <LayerSettingsModal 
-                layer={importPreview.layer}
-                title="Import Layer Preview"
-                extraInfo={
-                    <div className={`text-sm p-3 rounded-md flex items-center gap-2 mb-2 ${importPreview.objects.length > 0 ? 'bg-green-50 text-green-800 border border-green-100' : 'bg-red-50 text-red-800 border border-red-100'}`}>
-                         {importPreview.objects.length > 0 ? (
-                             <>
-                                <Layers size={16} />
-                                <span>Found <strong>{importPreview.objects.length}</strong> objects.</span>
-                             </>
-                         ) : (
-                             <>
-                                <AlertTriangle size={16} />
-                                <span>No objects found in file! The layer will be empty.</span>
-                             </>
-                         )}
+            importPreview.layers.length > 1 ? (
+                // Multi-Layer Import Confirmation Modal
+                <div className="fixed inset-0 bg-black/50 z-[2000] flex items-center justify-center p-4 backdrop-blur-sm">
+                    <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in-up">
+                        <div className="flex justify-between items-center p-4 border-b border-gray-100 bg-gray-50">
+                             <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                                <FileJson size={18} />
+                                Multi-Layer Import
+                            </h3>
+                            <button onClick={() => setImportPreview(null)} className="text-gray-400 hover:text-gray-600">
+                                <X size={20} />
+                            </button>
+                        </div>
+                        <div className="p-5 space-y-4">
+                            <div className="bg-blue-50 text-blue-800 p-3 rounded-lg border border-blue-100 text-sm">
+                                <p className="font-semibold mb-1">Project File Detected</p>
+                                <p>This file contains multiple layers.</p>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="bg-gray-50 p-3 rounded border border-gray-200 text-center">
+                                     <div className="text-xl font-bold text-gray-800">{importPreview.layers.length}</div>
+                                     <div className="text-xs text-gray-500 uppercase font-semibold">Layers</div>
+                                </div>
+                                <div className="bg-gray-50 p-3 rounded border border-gray-200 text-center">
+                                     <div className="text-xl font-bold text-gray-800">{importPreview.objects.length}</div>
+                                     <div className="text-xs text-gray-500 uppercase font-semibold">Objects</div>
+                                </div>
+                            </div>
+                            <p className="text-xs text-gray-500">
+                                Importing will add these layers to your current map. Existing layers will be kept.
+                            </p>
+                        </div>
+                        <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-end gap-2">
+                            <button 
+                                onClick={() => setImportPreview(null)}
+                                className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-200 rounded-md transition-colors"
+                            >
+                                Cancel
+                            </button>
+                            <button 
+                                onClick={() => {
+                                    onImportData(importPreview.layers, importPreview.objects);
+                                    setImportPreview(null);
+                                    // Expand newly imported layers
+                                    setExpandedLayerIds(prev => {
+                                        const next = new Set(prev);
+                                        importPreview.layers.forEach(l => next.add(l.id));
+                                        return next;
+                                    });
+                                }}
+                                className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-md shadow-sm transition-colors"
+                            >
+                                Import Layers
+                            </button>
+                        </div>
                     </div>
-                }
-                onSave={(finalLayer) => {
-                    onImportLayer(finalLayer, importPreview.objects);
-                    setImportPreview(null);
-                    // Auto-expand the new layer
-                    setExpandedLayerIds(prev => new Set(prev).add(finalLayer.id));
-                }}
-                onCancel={() => setImportPreview(null)}
-            />
+                </div>
+            ) : (
+                // Single Layer Import (Original Behavior)
+                <LayerSettingsModal 
+                    layer={importPreview.layers[0]}
+                    title="Import Layer Preview"
+                    extraInfo={
+                        <div className={`text-sm p-3 rounded-md flex items-center gap-2 mb-2 ${importPreview.objects.length > 0 ? 'bg-green-50 text-green-800 border border-green-100' : 'bg-red-50 text-red-800 border border-red-100'}`}>
+                             {importPreview.objects.length > 0 ? (
+                                 <>
+                                    <Layers size={16} />
+                                    <span>Found <strong>{importPreview.objects.length}</strong> objects.</span>
+                                 </>
+                             ) : (
+                                 <>
+                                    <AlertTriangle size={16} />
+                                    <span>No objects found in file! The layer will be empty.</span>
+                                 </>
+                             )}
+                        </div>
+                    }
+                    onSave={(finalLayer) => {
+                        // Pass as single-item array
+                        onImportData([finalLayer], importPreview.objects);
+                        setImportPreview(null);
+                        setExpandedLayerIds(prev => new Set(prev).add(finalLayer.id));
+                    }}
+                    onCancel={() => setImportPreview(null)}
+                />
+            )
         )}
     </>
   );
